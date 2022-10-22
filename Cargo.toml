@@ -12,7 +12,13 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = [
+  "test-engine-kv-rocksdb",
+  "test-engine-raft-raft-engine",
+  "cloud-aws",
+  "cloud-gcp",
+  "cloud-azure",
+]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
 mimalloc = ["tikv_alloc/mimalloc"]
@@ -26,31 +32,18 @@ failpoints = [
   "tikv_util/failpoints",
   "engine_rocks/failpoints",
 ]
-cloud-aws = [
-  "encryption_export/cloud-aws",
-  "sst_importer/cloud-aws",
+cloud-aws = ["encryption_export/cloud-aws", "sst_importer/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp", "sst_importer/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure", "sst_importer/cloud-azure"]
+testexport = [
+  "raftstore/testexport",
+  "api_version/testexport",
+  "causal_ts/testexport",
 ]
-cloud-gcp = [
-  "encryption_export/cloud-gcp",
-  "sst_importer/cloud-gcp",
-]
-cloud-azure = [
-  "encryption_export/cloud-azure",
-  "sst_importer/cloud-azure",
-]
-testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport"]
-test-engine-kv-rocksdb = [
-  "engine_test/test-engine-kv-rocksdb"
-]
-test-engine-raft-raft-engine = [
-  "engine_test/test-engine-raft-raft-engine"
-]
-test-engines-rocksdb = [
-  "engine_test/test-engines-rocksdb",
-]
-test-engines-panic = [
-  "engine_test/test-engines-panic",
-]
+test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
+test-engines-panic = ["engine_test/test-engines-panic"]
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
 pprof-fp = ["pprof/frame-pointer"]
@@ -93,10 +86,19 @@ flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-timer = "3.0"
-futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
+futures-util = { version = "0.3.1", default-features = false, features = [
+  "io",
+  "async-await",
+] }
 getset = "0.1"
-grpcio = { version = "0.10.3", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
-grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
+grpcio = { version = "0.10.3", default-features = false, features = [
+  "openssl-vendored",
+  "protobuf-codec",
+  "nightly",
+] }
+grpcio-health = { version = "0.10", default-features = false, features = [
+  "protobuf-codec",
+] }
 hex = "0.4"
 http = "0"
 hyper = { version = "0.14", features = ["full"] }
@@ -108,7 +110,10 @@ kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log = { version = "0.4", features = [
+  "max_level_trace",
+  "release_max_level_debug",
+] }
 log_wrappers = { path = "components/log_wrappers" }
 match-template = "0.0.1"
 memory_trace_macros = { path = "components/memory_trace_macros" }
@@ -126,13 +131,20 @@ paste = "1.0"
 pd_client = { path = "components/pd_client", default-features = false }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-pprof = { git = "https://github.com/tikv/pprof-rs.git", rev = "3fed55af8fc6cf69dbd954a0321c799c5a111e4e", default-features = false, features = ["flamegraph", "protobuf-codec"] }
+pprof = { git = "https://github.com/tikv/pprof-rs.git", rev = "3fed55af8fc6cf69dbd954a0321c799c5a111e4e", default-features = false, features = [
+  "flamegraph",
+  "protobuf-codec",
+] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { version = "0.7.0", default-features = false, features = [
+  "protobuf-codec",
+] }
 raft_log_engine = { path = "components/raft_log_engine", default-features = false }
-raftstore = { path = "components/raftstore", default-features = false, features = ["engine_rocks"] }
+raftstore = { path = "components/raftstore", default-features = false, features = [
+  "engine_rocks",
+] }
 rand = "0.7.3"
 regex = "1.3"
 resource_metering = { path = "components/resource_metering" }
@@ -144,7 +156,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_ignored = "0.1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog = { version = "2.3", features = [
+  "max_level_trace",
+  "release_max_level_debug",
+] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 sst_importer = { path = "components/sst_importer", default-features = false }
 strum = { version = "0.20", features = ["derive"] }
@@ -172,9 +187,13 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 walkdir = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
+libbpf-rs = "0.18"
+ctrlc = "3.2.3"
+pnet = "0.31"
+
 [dev-dependencies]
 api_version = { path = "components/api_version", features = ["testexport"] }
-example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" } # should be a binary dependency
+example_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }         # should be a binary dependency
 hyper-openssl = "0.9"
 panic_hook = { path = "components/panic_hook" }
 reqwest = { version = "0.11", features = ["blocking"] }
@@ -241,9 +260,9 @@ members = [
   "components/encryption",
   "components/encryption/export",
   "components/engine_rocks_helper",
-# Only enable tirocks in local development, otherwise it can slow down compilation.
-# TODO: always enable tirocks and remove engine_rocks.
-#  "components/engine_tirocks",
+  # Only enable tirocks in local development, otherwise it can slow down compilation.
+  # TODO: always enable tirocks and remove engine_rocks.
+  #  "components/engine_tirocks",
   "components/error_code",
   "components/external_storage",
   "components/external_storage/export",

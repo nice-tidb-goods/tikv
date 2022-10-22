@@ -36,6 +36,7 @@ use super::{
     service::*,
     snap::{Runner as SnapHandler, Task as SnapTask},
     transport::ServerTransport,
+    xdp_socket::*,
     Config, Error, Result,
 };
 use crate::{
@@ -124,6 +125,9 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
 
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
+
+        let toy_services = start_toy_service(storage.clone());
+        debug_thread_pool.spawn_blocking(move || async { toy_services.await });
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
@@ -334,6 +338,84 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         self.local_addr
     }
 }
+
+async fn start_toy_service<E, L, F>(storage: Storage<E, L, F>)
+where
+    E: Engine,
+    L: LockManager,
+    F: KvFormat,
+{
+    let ifname = std::ffi::CString::new("wlp1s0").unwrap();
+    let ifindex = unsafe { libc::if_nametoindex(ifname.as_ptr()) as i32 };
+
+    let (
+        (prog_fd, buffer_size, buffer, mut umem),
+        (mut fq, mut cq, mut rx, mut tx),
+        (xsk, mut umem_frame_free, mut umem_frame_addr),
+    ) = unsafe { setup(ifname) };
+
+    let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, std::sync::atomic::Ordering::SeqCst);
+    })
+    .unwrap();
+
+    let mut dgram_recv_buf = vec![0; 4096];
+    let mut prod_addr = 0;
+
+    loop {
+        unsafe {
+            let mut idx_rx = 0;
+            let mut idx_fq: u32 = 0;
+            let mut idx_tx: u32 = 0;
+
+            let received = peek_rx_ring(
+                &mut idx_rx,
+                &mut idx_fq,
+                &mut rx,
+                &mut fq,
+                &mut umem_frame_free,
+                &mut umem_frame_addr,
+            );
+
+            for _ in 0..received {
+                if let Some((peer_addr, local_addr, local_mac, peer_mac, udp_payload)) =
+                    receive_packet(&mut rx, &mut idx_rx, buffer)
+                {
+                    let new_payload = udp_payload;
+                    send_packet(
+                        &mut tx,
+                        &mut idx_tx,
+                        buffer,
+                        xsk.assume_init(),
+                        &mut umem_frame_addr,
+                        &mut umem_frame_free,
+                        local_mac,
+                        peer_mac,
+                        local_addr,
+                        peer_addr,
+                        new_payload.as_slice(),
+                    );
+                }
+            }
+
+            libbpf_rs::libbpf_sys::_xsk_ring_cons__release(&mut rx, received);
+        }
+    }
+
+    #[allow(unreachable_code)]
+    unsafe {
+        let ret = libbpf_rs::libbpf_sys::bpf_xdp_detach(
+            ifindex,
+            libbpf_rs::libbpf_sys::XDP_FLAGS_SKB_MODE,
+            std::ptr::null(),
+        );
+        println!("bpf_xdp_detach: {}", ret);
+    }
+}
+
+fn process_packet() {}
 
 #[cfg(any(test, feature = "testexport"))]
 pub mod test_router {

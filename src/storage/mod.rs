@@ -73,7 +73,9 @@ use std::{
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{raw_ttl::ttl_to_expire_ts, CfName, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS};
+use engine_traits::{
+    raw_ttl::ttl_to_expire_ts, CfName, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+};
 use futures::prelude::*;
 use kvproto::{
     kvrpcpb::{
@@ -568,6 +570,29 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         Ok(())
     }
 
+    pub fn unreliable_get(
+        &self,
+        key: Key,
+    ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        let res = self.read_pool.spawn_handle(
+            async move {
+                let snapshot =
+                    Self::with_tls_engine(|engine| engine.kv_engine().unwrap().snapshot());
+                let value = engine_traits::Peekable::get_value(&snapshot, key.as_encoded())?
+                    .map(|db_vector| (*db_vector).to_vec());
+
+                Ok((value, KvGetStatistics::default()))
+            },
+            CommandPri::Normal,
+            thread_rng().next_u64(),
+        );
+
+        async move {
+            res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+                .await?
+        }
+    }
+
     /// Get value of the given key from a snapshot.
     ///
     /// Only writes that are committed before `start_ts` are visible.
@@ -627,6 +652,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 )?;
                 let snapshot =
                     Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx)).await?;
+                // let snapshot =
+                //     Self::with_tls_engine(|engine| engine.kv_engine().unwrap().snapshot());
 
                 {
                     let begin_instant = Instant::now();

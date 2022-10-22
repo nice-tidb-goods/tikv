@@ -22,6 +22,8 @@ pub mod snap;
 pub mod status_server;
 pub mod transport;
 pub mod ttl;
+pub mod xdp_socket;
+pub mod xdppass;
 
 pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder};
 
