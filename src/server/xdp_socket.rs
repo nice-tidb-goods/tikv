@@ -254,7 +254,11 @@ pub(crate) unsafe fn peek_rx_ring(
     if received == 0 {
         return 0;
     }
-    info!("xsk_ring_cons__peek: {}, idx_rx: {}", received, idx_rx);
+
+    info!(
+        "[xdp] - xsk_ring_cons__peek: {}, idx_rx: {}",
+        received, idx_rx
+    );
 
     // Stuff the ring with as much frames as possible
     let mut umem_ctrl = umem_ctrl.lock().unwrap();
