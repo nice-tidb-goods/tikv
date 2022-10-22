@@ -229,7 +229,7 @@ pub fn origin_key(key: &[u8]) -> &[u8] {
 pub fn enc_start_key(region: &Region) -> Vec<u8> {
     // only initialized region's start_key can be encoded, otherwise there must be
     // bugs somewhere.
-    assert!(!region.get_peers().is_empty());
+    // assert!(!region.get_peers().is_empty());
     data_key(region.get_start_key())
 }
 
@@ -237,7 +237,7 @@ pub fn enc_start_key(region: &Region) -> Vec<u8> {
 pub fn enc_end_key(region: &Region) -> Vec<u8> {
     // only initialized region's end_key can be encoded, otherwise there must be
     // bugs somewhere.
-    assert!(!region.get_peers().is_empty());
+    // assert!(!region.get_peers().is_empty());
     data_end_key(region.get_end_key())
 }
 

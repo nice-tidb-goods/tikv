@@ -160,12 +160,12 @@ pub type Callback<T> = Box<dyn FnOnce(Result<T>) + Send>;
 /// and appending timestamp.
 pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
     // TODO: Too many Arcs, would be slow when clone.
-    engine: E,
+    pub engine: E,
 
     sched: TxnScheduler<E, L>,
 
     /// The thread pool used to run most read operations.
-    read_pool: ReadPoolHandle,
+    pub read_pool: ReadPoolHandle,
 
     concurrency_manager: ConcurrencyManager,
 

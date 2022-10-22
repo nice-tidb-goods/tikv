@@ -1,23 +1,58 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    array,
+    ffi::CString,
     i32,
-    net::{IpAddr, SocketAddr},
+    io::Write,
+    mem,
+    mem::MaybeUninit,
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+    ptr::{self, addr_of_mut, null, null_mut},
+    slice,
     str::FromStr,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use api_version::KvFormat;
+use byteorder::{ByteOrder, LittleEndian};
+use engine_traits::KvEngine;
 use futures::{compat::Stream01CompatExt, stream::StreamExt};
+use futures_executor::block_on;
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
-use kvproto::tikvpb::*;
+use kvproto::{
+    kvrpcpb::{CommandPri, IsolationLevel},
+    tikvpb::*,
+};
+use libbpf_rs::libbpf_sys::*;
+use libc::{
+    c_void, if_nametoindex, pollfd, posix_memalign, sendto, sysconf, MSG_DONTWAIT, POLLIN,
+    _SC_PAGESIZE,
+};
+use pnet::{
+    packet::{
+        ethernet::{EtherType, EtherTypes, MutableEthernetPacket},
+        ip,
+        ip::{IpNextHeaderProtocol, IpNextHeaderProtocols},
+        ipv4::{self, MutableIpv4Packet},
+        udp::{self, MutableUdpPacket, Udp},
+        MutablePacket, Packet,
+    },
+    util::MacAddr,
+};
 use raftstore::{
     router::RaftStoreRouter,
-    store::{CheckLeaderTask, SnapManager},
+    store::{CheckLeaderTask, RegionSnapshot, SnapManager},
 };
+use rand::prelude::*;
 use security::SecurityManager;
+use tikv_kv::{with_tls_engine, Statistics};
 use tikv_util::{
     config::VersionTrack,
     sys::{get_global_memory_usage, record_global_memory_usage},
@@ -27,6 +62,13 @@ use tikv_util::{
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
 use tokio_timer::timer::Handle;
+use txn_types::{Key, TimeStamp, TsSet};
+
+use super::xdppass::*;
+use crate::storage::txn::store::Store;
+
+const FRAME_SIZE: usize = XSK_UMEM__DEFAULT_FRAME_SIZE as usize;
+const NUM_FRAMES: usize = 4096;
 
 use super::{
     load_statistics::*,
@@ -43,8 +85,8 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2,
     read_pool::ReadPool,
-    server::{gc_worker::GcWorker, Proxy},
-    storage::{lock_manager::LockManager, Engine, Storage},
+    server::{gc_worker::GcWorker, xdppass::XdppassSkelBuilder, Proxy},
+    storage::{lock_manager::LockManager, Engine, SnapshotStore, Storage},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
@@ -126,8 +168,13 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
 
-        let toy_services = start_toy_service(storage.clone());
-        debug_thread_pool.spawn_blocking(move || async { toy_services.await });
+        info!("start toy service!");
+        let toy_services = unsafe { start_toy_service(storage.clone()) };
+        thread::Builder::new()
+            .name("toy-service".to_string())
+            .spawn(move || block_on(toy_services))
+            .unwrap();
+        // debug_thread_pool.spawn_blocking(move || async { toy_services.await });
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
@@ -339,27 +386,138 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
     }
 }
 
-async fn start_toy_service<E, L, F>(storage: Storage<E, L, F>)
+pub struct UmemCtrl {
+    pub umem_frame_addr: [u64; NUM_FRAMES],
+    pub umem_frame_free: usize,
+}
+
+impl UmemCtrl {
+    pub fn new() -> Mutex<UmemCtrl> {
+        Mutex::new(UmemCtrl {
+            umem_frame_addr: array::from_fn(|i| (i * FRAME_SIZE) as u64),
+            umem_frame_free: NUM_FRAMES,
+        })
+    }
+}
+
+pub fn xsk_alloc_umem_frame(umem_ctrl: &mut UmemCtrl) -> u64 {
+    if umem_ctrl.umem_frame_free == 0 {
+        return u64::MAX;
+    }
+    umem_ctrl.umem_frame_free -= 1;
+    let frame = umem_ctrl.umem_frame_addr[umem_ctrl.umem_frame_free];
+    umem_ctrl.umem_frame_addr[umem_ctrl.umem_frame_free] = u64::MAX;
+    return frame;
+}
+
+async unsafe fn start_toy_service<E, L, F>(storage: Storage<E, L, F>)
 where
     E: Engine,
     L: LockManager,
     F: KvFormat,
 {
-    let ifname = std::ffi::CString::new("wlp1s0").unwrap();
+    let ifname = std::ffi::CString::new("enp34s0").unwrap();
     let ifindex = unsafe { libc::if_nametoindex(ifname.as_ptr()) as i32 };
 
-    let (
-        (prog_fd, buffer_size, buffer, mut umem),
-        (mut fq, mut cq, mut rx, mut tx),
-        (xsk, mut umem_frame_free, mut umem_frame_addr),
-    ) = unsafe { setup(ifname) };
+    info!("ifindex"; "index" => ifindex);
+
+    let read_pool = storage.read_pool.clone();
+
+    // bump_memlock_rlimit()?;
+
+    let skel_builder = XdppassSkelBuilder::default();
+    let open_skel = skel_builder.open().unwrap();
+    let skel = open_skel.load().unwrap();
+
+    let prog_fd = skel.progs().xdp_pass_prog().fd();
+    let maps = skel.maps();
+    info!("map fd: {}", maps.xsks_map().fd());
+
+    let buffer_size = FRAME_SIZE * NUM_FRAMES;
+    let mut buffer: *mut c_void = ptr::null_mut();
+
+    let page_size = sysconf(_SC_PAGESIZE) as usize;
+    info!("page size: {}", page_size);
+    let ret = posix_memalign(&mut buffer, page_size, buffer_size);
+    info!("posix_memalign: {}", ret);
+
+    let mut umem: MaybeUninit<*mut xsk_umem> = MaybeUninit::zeroed();
+    let mut fq: MaybeUninit<xsk_ring_prod> = MaybeUninit::zeroed();
+    let mut cq: MaybeUninit<xsk_ring_cons> = MaybeUninit::zeroed();
+
+    let ret = bpf_set_link_xdp_fd(ifindex, prog_fd, XDP_FLAGS_SKB_MODE);
+    info!("bpf_set_link_xdp_fd: {}", ret);
+
+    let ret = xsk_umem__create(
+        umem.as_mut_ptr(),
+        buffer,
+        buffer_size as u64,
+        fq.as_mut_ptr(),
+        cq.as_mut_ptr(),
+        null(),
+    );
+    println!("xsk_umem__create: {}", ret);
+
+    let umem = unsafe { umem.assume_init() };
+    let mut fq = unsafe { fq.assume_init() };
+    let mut cq = unsafe { cq.assume_init() };
+
+    let mut xsk: MaybeUninit<*mut xsk_socket> = MaybeUninit::zeroed();
+    let mut rx: MaybeUninit<xsk_ring_cons> = MaybeUninit::zeroed();
+    let mut tx: MaybeUninit<xsk_ring_prod> = MaybeUninit::zeroed();
+
+    let mut config: MaybeUninit<xsk_socket_config> = MaybeUninit::zeroed();
+    addr_of_mut!((*config.as_mut_ptr()).rx_size).write(XSK_RING_CONS__DEFAULT_NUM_DESCS);
+    addr_of_mut!((*config.as_mut_ptr()).tx_size).write(XSK_RING_PROD__DEFAULT_NUM_DESCS);
+    addr_of_mut!((*config.as_mut_ptr()).libbpf_flags).write(XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD);
+    addr_of_mut!((*config.as_mut_ptr()).xdp_flags).write(XDP_FLAGS_SKB_MODE);
+    addr_of_mut!((*config.as_mut_ptr()).bind_flags).write((XDP_COPY | XDP_USE_NEED_WAKEUP) as u16);
+    let ret = xsk_socket__create(
+        xsk.as_mut_ptr(),
+        ifname.as_ptr(),
+        0,
+        umem,
+        rx.as_mut_ptr(),
+        tx.as_mut_ptr(),
+        config.as_ptr(),
+    );
+    info!("xsk_socket__create: {}", ret);
+
+    let ret = xsk_socket__update_xskmap(xsk.assume_init(), maps.xsks_map().fd());
+    info!("xsk_socket__update_xskmap: {}", ret);
+
+    let mut prog_id: u32 = 0;
+    let umem_ctrl = Arc::new(UmemCtrl::new());
+    let mut idx: u32 = 0;
+
+    unsafe {
+        let ret = bpf_get_link_xdp_id(ifindex, &mut prog_id, XDP_FLAGS_SKB_MODE);
+        println!("info: {}, prog_id: {}", ret, prog_id);
+
+        let ret =
+            _xsk_ring_prod__reserve(&mut fq, XSK_RING_PROD__DEFAULT_NUM_DESCS as u64, &mut idx);
+        println!("info: {}, idx: {}", ret, idx);
+
+        let mut umem_ctrl = umem_ctrl.lock().unwrap();
+        for _ in 0..XSK_RING_PROD__DEFAULT_NUM_DESCS {
+            _xsk_ring_prod__fill_addr(&mut fq, idx).write(xsk_alloc_umem_frame(&mut *umem_ctrl));
+            idx += 1;
+        }
+        drop(umem_ctrl);
+
+        _xsk_ring_prod__submit(&mut fq, XSK_RING_PROD__DEFAULT_NUM_DESCS as u64);
+    }
+
+    let mut rx = unsafe { rx.assume_init() };
+    let mut tx = unsafe { tx.assume_init() };
 
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        r.store(false, std::sync::atomic::Ordering::SeqCst);
-    })
-    .unwrap();
+    // let r = running.clone();
+    // ctrlc::set_handler(move || {
+    //     r.store(false, std::sync::atomic::Ordering::SeqCst);
+    // })
+    // .unwrap();
+    let mut rng = rand::thread_rng();
 
     let mut dgram_recv_buf = vec![0; 4096];
     let mut prod_addr = 0;
@@ -370,32 +528,95 @@ where
             let mut idx_fq: u32 = 0;
             let mut idx_tx: u32 = 0;
 
-            let received = peek_rx_ring(
-                &mut idx_rx,
-                &mut idx_fq,
-                &mut rx,
-                &mut fq,
-                &mut umem_frame_free,
-                &mut umem_frame_addr,
-            );
+            let received = peek_rx_ring(&mut idx_rx, &mut idx_fq, &mut rx, &mut fq, &umem_ctrl);
 
             for _ in 0..received {
-                if let Some((peer_addr, local_addr, local_mac, peer_mac, udp_payload)) =
+                if let Some((peer_addr, local_addr, local_mac, peer_mac, mut udp_payload)) =
                     receive_packet(&mut rx, &mut idx_rx, buffer)
                 {
-                    let new_payload = udp_payload;
+                    let key = Key::from_raw(&udp_payload[16..]);
+                    let tx = &mut tx as *mut _ as usize;
+                    let xsk = xsk.assume_init() as usize;
+                    let buffer = buffer as usize;
+                    let umem_ctrl = umem_ctrl.clone();
+                    // read_pool
+                    //     .spawn(
+                    //         async move {
+                    //             let tx = tx as *mut xsk_ring_prod;
+                    //             let xsk = xsk as *mut xsk_socket;
+                    //             let buffer = buffer as *mut c_void;
+                    //             let snapshot = with_tls_engine(|engine: &E| {
+                    //                 engine.kv_engine().unwrap().snapshot()
+                    //             });
+                    //             let snapshot = RegionSnapshot::from_snapshot(
+                    //                 Arc::new(snapshot),
+                    //                 Default::default(),
+                    //             );
+                    //             let snap_store = SnapshotStore::new(
+                    //                 snapshot,
+                    //                 TimeStamp::max(),
+                    //                 IsolationLevel::Si,
+                    //                 true,
+                    //                 TsSet::Empty,
+                    //                 TsSet::Empty,
+                    //                 false,
+                    //             );
+                    //             let mut statistics = Statistics::default();
+                    //             let res = snap_store.get(&key, &mut statistics).unwrap();
+                    //             let value = res.unwrap_or(vec![]);
+                    //             LittleEndian::write_u64(
+                    //                 &mut udp_payload[8..16],
+                    //                 value.len() as u64,
+                    //             );
+                    //             udp_payload.truncate(16);
+                    //             udp_payload.extend_from_slice(&value);
+                    //             send_packet(
+                    //                 tx,
+                    //                 buffer,
+                    //                 xsk,
+                    //                 &umem_ctrl,
+                    //                 local_mac,
+                    //                 peer_mac,
+                    //                 local_addr,
+                    //                 peer_addr,
+                    //                 &udp_payload,
+                    //             );
+                    //         },
+                    //         CommandPri::High,
+                    //         rng.gen(),
+                    //     )
+                    //     .unwrap();
+                    let tx = tx as *mut xsk_ring_prod;
+                    let xsk = xsk as *mut xsk_socket;
+                    let buffer = buffer as *mut c_void;
+                    let snapshot = storage.engine.kv_engine().unwrap().snapshot();
+                    let snapshot =
+                        RegionSnapshot::from_snapshot(Arc::new(snapshot), Default::default());
+                    let snap_store = SnapshotStore::new(
+                        snapshot,
+                        TimeStamp::max(),
+                        IsolationLevel::Si,
+                        true,
+                        TsSet::Empty,
+                        TsSet::Empty,
+                        false,
+                    );
+                    let mut statistics = Statistics::default();
+                    let res = snap_store.get(&key, &mut statistics).unwrap();
+                    let value = res.unwrap_or(vec![]);
+                    LittleEndian::write_u64(&mut udp_payload[8..16], value.len() as u64);
+                    udp_payload.truncate(16);
+                    udp_payload.extend_from_slice(&value);
                     send_packet(
-                        &mut tx,
-                        &mut idx_tx,
+                        tx,
                         buffer,
-                        xsk.assume_init(),
-                        &mut umem_frame_addr,
-                        &mut umem_frame_free,
+                        xsk,
+                        &umem_ctrl,
                         local_mac,
                         peer_mac,
                         local_addr,
                         peer_addr,
-                        new_payload.as_slice(),
+                        &udp_payload,
                     );
                 }
             }

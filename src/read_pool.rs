@@ -275,10 +275,7 @@ pub fn build_yatp_read_pool<E: Engine, R: FlowStatsReporter>(
         .thread_count(
             config.min_thread_count,
             config.max_thread_count,
-            std::cmp::max(
-                UNIFIED_READPOOL_MIN_CONCURRENCY,
-                SysQuota::cpu_cores_quota() as usize,
-            ),
+            config.max_thread_count,
         )
         .after_start(move || {
             let engine = raftkv.lock().unwrap().clone();
