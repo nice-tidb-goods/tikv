@@ -46,74 +46,6 @@ fn xsk_alloc_umem_frame(umem_frame_addr: &mut [u64], umem_frame_free: &mut usize
     return frame;
 }
 
-// fn __main() -> Result<()> {
-//     let opts = Command::from_args();
-//     let ifname = CString::new(opts.ifname).unwrap();
-//     let ifindex = unsafe { if_nametoindex(ifname.as_ptr()) as i32 };
-
-//     let (
-//         (prog_fd, buffer_size, buffer, mut umem),
-//         (mut fq, mut cq, mut rx, mut tx),
-//         (xsk, mut umem_frame_free, mut umem_frame_addr),
-//     ) = unsafe { setup(ifname) };
-
-//     let running = Arc::new(AtomicBool::new(true));
-//     let r = running.clone();
-//     ctrlc::set_handler(move || {
-//         r.store(false, Ordering::SeqCst);
-//     })?;
-
-//     let mut dgram_recv_buf = vec![0; 4096];
-//     let mut prod_addr = 0;
-
-//     while running.load(Ordering::SeqCst) {
-//         unsafe {
-//             let mut idx_rx = 0;
-//             let mut idx_fq: u32 = 0;
-//             let mut idx_tx: u32 = 0;
-
-//             let received = peek_rx_ring(
-//                 &mut idx_rx,
-//                 &mut idx_fq,
-//                 &mut rx,
-//                 &mut fq,
-//                 &mut umem_frame_free,
-//                 &mut umem_frame_addr,
-//             );
-
-//             for _ in 0..received {
-//                 if let Some((peer_addr, local_addr, local_mac, peer_mac,
-// udp_payload)) =                     receive_packet(&mut rx, &mut idx_rx,
-// buffer)                 {
-//                     let new_payload = udp_payload;
-//                     send_packet(
-//                         &mut tx,
-//                         &mut idx_tx,
-//                         buffer,
-//                         xsk.assume_init(),
-//                         &mut umem_frame_addr,
-//                         &mut umem_frame_free,
-//                         local_mac,
-//                         peer_mac,
-//                         local_addr,
-//                         peer_addr,
-//                         new_payload.as_slice(),
-//                     );
-//                 }
-//             }
-
-//             _xsk_ring_cons__release(&mut rx, received);
-//         }
-//     }
-
-//     unsafe {
-//         let ret = bpf_xdp_detach(ifindex, XDP_FLAGS_SKB_MODE, ptr::null());
-//         println!("bpf_xdp_detach: {}", ret);
-//     }
-
-//     Ok(())
-// }
-
 #[allow(clippy::type_complexity)]
 pub(crate) unsafe fn setup(
     ifname: CString,
@@ -137,7 +69,7 @@ pub(crate) unsafe fn setup(
     ),
 ) {
     let ifindex = if_nametoindex(ifname.as_ptr()) as i32;
-    println!("ifindex: {ifindex}");
+    info!("[xdp] - ifindex: {ifindex}");
 
     // bump_memlock_rlimit()?;
 
@@ -147,22 +79,22 @@ pub(crate) unsafe fn setup(
 
     let prog_fd = skel.progs().xdp_pass_prog().fd();
     let maps = skel.maps();
-    println!("map fd: {}", maps.xsks_map().fd());
+    info!("[xdp] - map fd: {}", maps.xsks_map().fd());
 
     let buffer_size = FRAME_SIZE * NUM_FRAMES;
     let mut buffer: *mut c_void = ptr::null_mut();
 
     let page_size = sysconf(_SC_PAGESIZE) as usize;
-    println!("page size: {}", page_size);
+    info!("[xdp] - page size: {}", page_size);
     let ret = posix_memalign(&mut buffer, page_size, buffer_size);
-    println!("posix_memalign: {}", ret);
+    info!("[xdp] - posix_memalign: {}", ret);
 
     let mut umem: MaybeUninit<*mut xsk_umem> = MaybeUninit::zeroed();
     let mut fq: MaybeUninit<xsk_ring_prod> = MaybeUninit::zeroed();
     let mut cq: MaybeUninit<xsk_ring_cons> = MaybeUninit::zeroed();
 
     let ret = bpf_set_link_xdp_fd(ifindex, prog_fd, XDP_FLAGS_SKB_MODE);
-    println!("bpf_set_link_xdp_fd: {}", ret);
+    info!("[xdp] - bpf_set_link_xdp_fd: {}", ret);
 
     let ret = xsk_umem__create(
         umem.as_mut_ptr(),
@@ -172,7 +104,7 @@ pub(crate) unsafe fn setup(
         cq.as_mut_ptr(),
         null(),
     );
-    println!("xsk_umem__create: {}", ret);
+    info!("[xdp] - xsk_umem__create: {}", ret);
 
     let umem = unsafe { umem.assume_init() };
     let mut fq = unsafe { fq.assume_init() };
@@ -197,10 +129,10 @@ pub(crate) unsafe fn setup(
         tx.as_mut_ptr(),
         config.as_ptr(),
     );
-    println!("xsk_socket__create: {}", ret);
+    info!("[xdp] - xsk_socket__create: {}", ret);
 
     let ret = xsk_socket__update_xskmap(xsk.assume_init(), maps.xsks_map().fd());
-    println!("xsk_socket__update_xskmap: {}", ret);
+    info!("[xdp] - xsk_socket__update_xskmap: {}", ret);
 
     let mut prog_id: u32 = 0;
     let mut umem_frame_addr: [u64; NUM_FRAMES] = array::from_fn(|i| (i * FRAME_SIZE) as u64);
@@ -209,11 +141,11 @@ pub(crate) unsafe fn setup(
 
     unsafe {
         let ret = bpf_get_link_xdp_id(ifindex, &mut prog_id, XDP_FLAGS_SKB_MODE);
-        println!("bpf_get_link_xdp_id: {}, prog_id: {}", ret, prog_id);
+        info!("[xdp] - bpf_get_link_xdp_id: {}, prog_id: {}", ret, prog_id);
 
         let ret =
             _xsk_ring_prod__reserve(&mut fq, XSK_RING_PROD__DEFAULT_NUM_DESCS as u64, &mut idx);
-        println!("xsk_ring_prod__reserve: {}, idx: {}", ret, idx);
+        info!("[xdp] - xsk_ring_prod__reserve: {}, idx: {}", ret, idx);
 
         for _ in 0..XSK_RING_PROD__DEFAULT_NUM_DESCS {
             _xsk_ring_prod__fill_addr(&mut fq, idx).write(xsk_alloc_umem_frame(
@@ -249,7 +181,10 @@ pub(crate) unsafe fn peek_rx_ring(
     if received == 0 {
         return 0;
     }
-    println!("xsk_ring_cons__peek: {}, idx_rx: {}", received, idx_rx);
+    info!(
+        "[xdp] - xsk_ring_cons__peek: {}, idx_rx: {}",
+        received, idx_rx
+    );
 
     // Stuff the ring with as much frames as possible
     let stock_frames = _xsk_prod_nb_free(fq, *umem_frame_free as u32);
@@ -334,7 +269,7 @@ pub(crate) unsafe fn send_packet(
         udp.set_length((payload.len() as u16 + 8));
         udp.set_checksum(0);
         let udp = udp.consume_to_immutable();
-        println!("{:?}", udp);
+        info!("[xdp] - {:?}", udp);
         let udp_buf = udp.packet();
 
         let ip_len = udp_buf.len() + 20;
@@ -349,7 +284,7 @@ pub(crate) unsafe fn send_packet(
         ip.set_destination(extract_ipv4(&dest_addr));
         ip.set_checksum(ipv4::checksum(&ip.to_immutable()));
         let ip = ip.consume_to_immutable();
-        println!("{:?}", ip);
+        info!("[xdp] - {:?}", ip);
         let ip_buf = ip.packet();
 
         let mut eth = MutableEthernetPacket::owned(vec![0; ip_buf.len() + 64]).unwrap();
@@ -357,7 +292,7 @@ pub(crate) unsafe fn send_packet(
         eth.set_destination(dest_mac);
         eth.set_ethertype(EtherTypes::Ipv4);
         eth.set_payload(ip_buf);
-        println!("{:?}", eth);
+        info!("[xdp] - {:?}", eth);
         let eth = eth.consume_to_immutable();
         let eth_buf = eth.packet();
 
@@ -366,19 +301,19 @@ pub(crate) unsafe fn send_packet(
         let desc = _xsk_ring_prod__tx_desc(tx, *idx_tx);
         *idx_tx += 1;
 
-        println!("{:?}", eth_buf);
+        info!("[xdp] - {:?}", eth_buf);
 
         (*desc).len = eth_buf.len() as _;
         let data_ptr = _xsk_umem__get_data(umem, (*desc).addr);
         ptr::copy_nonoverlapping(eth_buf.as_ptr(), data_ptr as *mut u8, eth_buf.len());
         // let _ = data.write(eth_buf);
 
-        println!("data write finished");
+        info!("[xdp] - data write finished");
 
         _xsk_ring_prod__submit(tx, 1);
-        println!("submit finished");
+        info!("[xdp] - submit finished");
         sendto(xsk_socket__fd(xsk), null(), 0, MSG_DONTWAIT, null(), 0);
-        println!("sendto finished");
+        info!("[xdp] - sendto finished");
     }
 }
 

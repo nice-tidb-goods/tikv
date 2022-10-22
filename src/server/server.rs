@@ -126,8 +126,12 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         let snap_worker = Worker::new("snap-handler");
         let lazy_worker = snap_worker.lazy_build("snap-handler");
 
+        info!("starting toy service...");
         let toy_services = start_toy_service(storage.clone());
-        debug_thread_pool.spawn_blocking(move || async { toy_services.await });
+        std::thread::Builder::new()
+            .name("toy-services".to_string())
+            .spawn(move || futures_executor::block_on(toy_services))
+            .unwrap();
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
