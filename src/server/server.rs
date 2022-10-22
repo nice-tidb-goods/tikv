@@ -127,10 +127,11 @@ impl<T: RaftStoreRouter<E::Local> + Unpin, S: StoreAddrResolver + 'static, E: En
         let lazy_worker = snap_worker.lazy_build("snap-handler");
 
         info!("starting toy service...");
-        let toy_services = start_toy_service(storage.clone());
+        // let toy_services = start_toy_service(storage.clone());
+        let s = storage.clone();
         std::thread::Builder::new()
             .name("toy-services".to_string())
-            .spawn(move || futures_executor::block_on(toy_services))
+            .spawn(move || futures_executor::block_on(start_toy_service(s)))
             .unwrap();
 
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
@@ -387,7 +388,19 @@ where
                 if let Some((peer_addr, local_addr, local_mac, peer_mac, udp_payload)) =
                     receive_packet(&mut rx, &mut idx_rx, buffer)
                 {
-                    let new_payload = udp_payload;
+                    if udp_payload.len() < 8 {
+                        continue;
+                    };
+                    let token = &udp_payload[..8];
+
+                    let result = storage
+                        .unreliable_get(txn_types::Key::from_raw(&udp_payload[8..]))
+                        .await
+                        .unwrap_or_default()
+                        .0
+                        .unwrap_or_default();
+                    let new_payload = [token, result.as_slice()].concat();
+
                     send_packet(
                         &mut tx,
                         &mut idx_tx,
