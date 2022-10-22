@@ -387,6 +387,11 @@ pub fn xsk_alloc_umem_frame(umem_ctrl: &mut UmemCtrl) -> u64 {
     return frame;
 }
 
+pub fn xsk_free_umem_frame(umem_ctrl: &mut UmemCtrl, frame: u64) {
+    umem_ctrl.umem_frame_addr[umem_ctrl.umem_frame_free] = frame;
+    umem_ctrl.umem_frame_free += 1;
+}
+
 async unsafe fn start_toy_service<E, L, F>(storage: Storage<E, L, F>)
 where
     E: Engine,
@@ -497,13 +502,23 @@ where
         unsafe {
             let mut idx_rx = 0;
             let mut idx_fq: u32 = 0;
-            let mut idx_tx: u32 = 0;
+            let mut idx_cq: u32 = 0;
 
+            let completed = _xsk_ring_cons__peek(&mut cq, 64, &mut idx_cq);
+            if completed > 0 {
+                let mut umem_ctrl = umem_ctrl.lock().unwrap();
+                for _ in 0..completed {
+                    let addr = _xsk_ring_cons__comp_addr(&mut cq, idx_cq).read();
+                    xsk_free_umem_frame(&mut umem_ctrl, addr);
+                    idx_cq += 1;
+                }
+                _xsk_ring_cons__release(&mut cq, completed);
+            }
             let received = peek_rx_ring(&mut idx_rx, &mut idx_fq, &mut rx, &mut fq, &umem_ctrl);
 
             for _ in 0..received {
                 if let Some((peer_addr, local_addr, local_mac, peer_mac, mut udp_payload)) =
-                    receive_packet(&mut rx, &mut idx_rx, buffer)
+                    receive_packet(&mut rx, &mut idx_rx, buffer, &umem_ctrl)
                 {
                     let key = Key::from_raw(&udp_payload[16..]);
                     let tx = &mut tx as *mut _ as usize;

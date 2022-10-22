@@ -20,7 +20,7 @@ use pnet::{
 };
 
 use super::server::UmemCtrl;
-use crate::server::server::xsk_alloc_umem_frame;
+use crate::server::server::{xsk_alloc_umem_frame, xsk_free_umem_frame};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn peek_rx_ring(
@@ -72,6 +72,7 @@ pub(crate) unsafe fn receive_packet(
     rx: &mut xsk_ring_cons,
     idx_rx: &mut u32,
     buffer: *mut c_void,
+    umem_ctrl: &Mutex<UmemCtrl>,
 ) -> Option<(SocketAddr, SocketAddr, MacAddr, MacAddr, Vec<u8>)> {
     let desc = _xsk_ring_cons__rx_desc(rx, *idx_rx);
     *idx_rx += 1;
@@ -86,6 +87,7 @@ pub(crate) unsafe fn receive_packet(
     let udp = MutableUdpPacket::new(ip.payload_mut())?;
 
     let udp_payload = udp.payload().to_owned();
+    xsk_free_umem_frame(&mut umem_ctrl.lock().unwrap(), addr);
 
     let peer_addr = SocketAddr::V4(SocketAddrV4::new(peer_ip, udp.get_source()));
     let local_addr = SocketAddr::V4(SocketAddrV4::new(local_ip, udp.get_destination()));
