@@ -113,8 +113,6 @@ pub(crate) unsafe fn send_packet(
     dest_addr: SocketAddr,
     payload: &[u8],
 ) {
-    let mut idx_tx: u32 = 0;
-
     let mut udp = MutableUdpPacket::owned(vec![0; payload.len() + 8]).unwrap();
     udp.set_payload(payload);
     udp.set_source(source_addr.port());
@@ -149,30 +147,22 @@ pub(crate) unsafe fn send_packet(
     let eth = eth.consume_to_immutable();
     let eth_buf = eth.packet();
 
-    let addr = xsk_alloc_umem_frame(&mut umem_ctrl.lock().unwrap());
+    let mut idx_tx: u32 = 0;
+    let ret = _xsk_ring_prod__reserve(tx, 1, &mut idx_tx);
+
+    let addr = xsk_alloc_umem_frame(&mut *umem_ctrl.lock().unwrap());
     let data_ptr = _xsk_umem__get_data(umem, addr);
     ptr::copy_nonoverlapping(eth_buf.as_ptr(), data_ptr as *mut u8, eth_buf.len());
 
+    // _xsk_ring_prod__fill_addr(tx, idx_tx).write(addr);
     let umem_ctrl = umem_ctrl.lock().unwrap();
-    let ret = _xsk_ring_prod__reserve(tx, 1, &mut idx_tx);
-    info!(
-        "xsk_ring_prod__reserve: {}, idx_tx: {}, addr: {}, thread_id: {:?}",
-        ret,
-        idx_tx,
-        addr,
-        thread::current().id()
-    );
-    _xsk_ring_prod__fill_addr(tx, idx_tx).write(addr);
     let desc = _xsk_ring_prod__tx_desc(tx, idx_tx);
+    (*desc).addr = addr;
     (*desc).len = eth_buf.len() as _;
+
     _xsk_ring_prod__submit(tx, 1);
     drop(umem_ctrl);
-
-    info!("data write finished");
-
-    info!("submit finished");
     sendto(xsk_socket__fd(xsk), null(), 0, MSG_DONTWAIT, null(), 0);
-    info!("sendto finished");
 }
 
 fn extract_ipv4(socket_addr: &SocketAddr) -> Ipv4Addr {
