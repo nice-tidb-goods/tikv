@@ -1,20 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    array,
-    ffi::CString,
-    i32,
-    io::Write,
-    mem,
+    array, i32,
     mem::MaybeUninit,
-    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
-    ptr::{self, addr_of_mut, null, null_mut},
-    slice,
+    net::{IpAddr, SocketAddr},
+    ptr::{self, addr_of_mut, null},
     str::FromStr,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -26,33 +18,15 @@ use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use futures_executor::block_on;
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
 use grpcio_health::{create_health, HealthService, ServingStatus};
-use kvproto::{
-    kvrpcpb::{CommandPri, IsolationLevel},
-    tikvpb::*,
-};
+use kvproto::{kvrpcpb::IsolationLevel, tikvpb::*};
 use libbpf_rs::libbpf_sys::*;
-use libc::{
-    c_void, if_nametoindex, pollfd, posix_memalign, sendto, sysconf, MSG_DONTWAIT, POLLIN,
-    _SC_PAGESIZE,
-};
-use pnet::{
-    packet::{
-        ethernet::{EtherType, EtherTypes, MutableEthernetPacket},
-        ip,
-        ip::{IpNextHeaderProtocol, IpNextHeaderProtocols},
-        ipv4::{self, MutableIpv4Packet},
-        udp::{self, MutableUdpPacket, Udp},
-        MutablePacket, Packet,
-    },
-    util::MacAddr,
-};
+use libc::{c_void, posix_memalign, sysconf, _SC_PAGESIZE};
 use raftstore::{
     router::RaftStoreRouter,
     store::{CheckLeaderTask, RegionSnapshot, SnapManager},
 };
-use rand::prelude::*;
 use security::SecurityManager;
-use tikv_kv::{with_tls_engine, Statistics};
+use tikv_kv::Statistics;
 use tikv_util::{
     config::VersionTrack,
     sys::{get_global_memory_usage, record_global_memory_usage},
@@ -64,7 +38,6 @@ use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime
 use tokio_timer::timer::Handle;
 use txn_types::{Key, TimeStamp, TsSet};
 
-use super::xdppass::*;
 use crate::storage::txn::store::Store;
 
 const FRAME_SIZE: usize = XSK_UMEM__DEFAULT_FRAME_SIZE as usize;
@@ -517,9 +490,7 @@ where
     //     r.store(false, std::sync::atomic::Ordering::SeqCst);
     // })
     // .unwrap();
-    let mut rng = rand::thread_rng();
 
-    let mut dgram_recv_buf = vec![0; 4096];
     let mut prod_addr = 0;
 
     loop {
@@ -635,8 +606,6 @@ where
         println!("bpf_xdp_detach: {}", ret);
     }
 }
-
-fn process_packet() {}
 
 #[cfg(any(test, feature = "testexport"))]
 pub mod test_router {
