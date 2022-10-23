@@ -149,15 +149,14 @@ pub(crate) unsafe fn send_packet(
     let eth = eth.consume_to_immutable();
     let eth_buf = eth.packet();
 
-    let mut idx_tx: u32 = 0;
-    let ret = _xsk_ring_prod__reserve(tx, 1, &mut idx_tx);
-
     let addr = xsk_alloc_umem_frame(&mut *umem_ctrl.lock().unwrap());
     let data_ptr = _xsk_umem__get_data(umem, addr);
     ptr::copy_nonoverlapping(eth_buf.as_ptr(), data_ptr as *mut u8, eth_buf.len());
 
     // _xsk_ring_prod__fill_addr(tx, idx_tx).write(addr);
     let umem_ctrl = umem_ctrl.lock().unwrap();
+    let mut idx_tx: u32 = 0;
+    let ret = _xsk_ring_prod__reserve(tx, 1, &mut idx_tx);
     let desc = _xsk_ring_prod__tx_desc(tx, idx_tx);
     (*desc).addr = addr;
     (*desc).len = eth_buf.len() as _;
