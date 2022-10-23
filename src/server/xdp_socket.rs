@@ -35,21 +35,21 @@ pub(crate) unsafe fn peek_rx_ring(
         return 0;
     }
 
-    info!(
-        "[xdp] - xsk_ring_cons__peek: {}, idx_rx: {}",
-        received, idx_rx
-    );
+    // info!(
+    //     "[xdp] - xsk_ring_cons__peek: {}, idx_rx: {}",
+    //     received, idx_rx
+    // );
 
     // Stuff the ring with as much frames as possible
     let mut umem_ctrl = umem_ctrl.lock().unwrap();
     let stock_frames = _xsk_prod_nb_free(fq, umem_ctrl.umem_frame_free as u32);
     if stock_frames > 0 {
         let ret = _xsk_ring_prod__reserve(fq, stock_frames as u64, idx_fq);
-        info!(
-            "xsk_ring_prod__reserve: {}, stock_frames: {}, idx_fq: {},
-        umem_frame_free: {}",
-            ret, stock_frames, idx_fq, umem_ctrl.umem_frame_free
-        );
+        // info!(
+        //     "xsk_ring_prod__reserve: {}, stock_frames: {}, idx_fq: {},
+        // umem_frame_free: {}",
+        //     ret, stock_frames, idx_fq, umem_ctrl.umem_frame_free
+        // );
 
         for _ in 0..stock_frames {
             _xsk_ring_prod__fill_addr(fq, *idx_fq).write(xsk_alloc_umem_frame(&mut umem_ctrl));
@@ -94,11 +94,11 @@ pub(crate) unsafe fn receive_packet(
     let local_mac = eth.get_destination();
     let peer_mac = eth.get_source();
 
-    info!(
-        "received packet from {:?}, payload size {:?}",
-        peer_addr,
-        udp_payload.len()
-    );
+    // info!(
+    //     "received packet from {:?}, payload size {:?}",
+    //     peer_addr,
+    //     udp_payload.len()
+    // );
 
     Some((peer_addr, local_addr, local_mac, peer_mac, udp_payload))
 }
@@ -122,7 +122,7 @@ pub(crate) unsafe fn send_packet(
     udp.set_length(payload.len() as u16 + 8);
     udp.set_checksum(0);
     let udp = udp.consume_to_immutable();
-    info!("{:?}", udp);
+    // info!("{:?}", udp);
     let udp_buf = udp.packet();
 
     let ip_len = udp_buf.len() + 20;
@@ -137,7 +137,7 @@ pub(crate) unsafe fn send_packet(
     ip.set_destination(extract_ipv4(&dest_addr));
     ip.set_checksum(ipv4::checksum(&ip.to_immutable()));
     let ip = ip.consume_to_immutable();
-    info!("{:?}", ip);
+    // info!("{:?}", ip);
     let ip_buf = ip.packet();
 
     let mut eth = MutableEthernetPacket::owned(vec![0; ip_buf.len() + 64]).unwrap();
@@ -145,7 +145,7 @@ pub(crate) unsafe fn send_packet(
     eth.set_destination(dest_mac);
     eth.set_ethertype(EtherTypes::Ipv4);
     eth.set_payload(ip_buf);
-    info!("{:?}", eth);
+    // info!("{:?}", eth);
     let eth = eth.consume_to_immutable();
     let eth_buf = eth.packet();
 
