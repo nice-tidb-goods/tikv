@@ -23,7 +23,7 @@ use kvproto::{
     tikvpb::*,
 };
 use libbpf_rs::libbpf_sys::*;
-use libc::{c_void, posix_memalign, sysconf, _SC_PAGESIZE};
+use libc::{c_void, pollfd, posix_memalign, sysconf, POLLIN, _SC_PAGESIZE};
 use raftstore::{
     router::RaftStoreRouter,
     store::{CheckLeaderTask, RegionSnapshot, SnapManager},
@@ -497,6 +497,9 @@ where
     // .unwrap();
 
     let mut prod_addr = 0;
+    let mut pfd: pollfd = MaybeUninit::<pollfd>::zeroed().assume_init();
+    pfd.fd = xsk_socket__fd(xsk);
+    pfd.events = POLLIN;
 
     loop {
         unsafe {
@@ -513,6 +516,10 @@ where
                     idx_cq += 1;
                 }
                 _xsk_ring_cons__release(&mut cq, completed);
+            }
+            let ret = libc::poll(&mut pfd, 1, -1);
+            if ret <= 0 || ret > 1 {
+                continue;
             }
             let received = peek_rx_ring(&mut idx_rx, &mut idx_fq, &mut rx, &mut fq, &umem_ctrl);
 
