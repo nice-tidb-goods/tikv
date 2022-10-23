@@ -398,7 +398,7 @@ where
     L: LockManager,
     F: KvFormat,
 {
-    let ifname = std::ffi::CString::new("wlan0").unwrap();
+    let ifname = std::ffi::CString::new("ens5").unwrap();
     let ifindex = unsafe { libc::if_nametoindex(ifname.as_ptr()) as i32 };
 
     info!("ifindex"; "index" => ifindex);
@@ -427,7 +427,7 @@ where
     let mut fq: xsk_ring_prod = MaybeUninit::zeroed().assume_init();
     let mut cq: xsk_ring_cons = MaybeUninit::zeroed().assume_init();
 
-    let ret = bpf_set_link_xdp_fd(ifindex, prog_fd, XDP_FLAGS_SKB_MODE);
+    let ret = bpf_set_link_xdp_fd(ifindex, prog_fd, XDP_FLAGS_DRV_MODE);
     info!("bpf_set_link_xdp_fd: {}", ret);
 
     let ret = xsk_umem__create(
@@ -451,7 +451,7 @@ where
     addr_of_mut!((*config.as_mut_ptr()).rx_size).write(XSK_RING_CONS__DEFAULT_NUM_DESCS);
     addr_of_mut!((*config.as_mut_ptr()).tx_size).write(XSK_RING_PROD__DEFAULT_NUM_DESCS);
     addr_of_mut!((*config.as_mut_ptr()).libbpf_flags).write(XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD);
-    addr_of_mut!((*config.as_mut_ptr()).xdp_flags).write(XDP_FLAGS_SKB_MODE);
+    addr_of_mut!((*config.as_mut_ptr()).xdp_flags).write(XDP_FLAGS_DRV_MODE);
     addr_of_mut!((*config.as_mut_ptr()).bind_flags).write((XDP_COPY | XDP_USE_NEED_WAKEUP) as u16);
     let ret = xsk_socket__create(
         &mut xsk,
@@ -472,7 +472,7 @@ where
     let mut idx: u32 = 0;
 
     unsafe {
-        let ret = bpf_get_link_xdp_id(ifindex, &mut prog_id, XDP_FLAGS_SKB_MODE);
+        let ret = bpf_get_link_xdp_id(ifindex, &mut prog_id, XDP_FLAGS_DRV_MODE);
         println!("info: {}, prog_id: {}", ret, prog_id);
 
         let ret =
@@ -583,7 +583,7 @@ where
     unsafe {
         let ret = libbpf_rs::libbpf_sys::bpf_xdp_detach(
             ifindex,
-            libbpf_rs::libbpf_sys::XDP_FLAGS_SKB_MODE,
+            libbpf_rs::libbpf_sys::XDP_FLAGS_DRV_MODE,
             std::ptr::null(),
         );
         println!("bpf_xdp_detach: {}", ret);
