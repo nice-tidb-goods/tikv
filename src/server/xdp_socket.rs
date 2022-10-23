@@ -163,7 +163,9 @@ pub(crate) unsafe fn send_packet(
 
     _xsk_ring_prod__submit(tx, 1);
     drop(umem_ctrl);
-    sendto(xsk_socket__fd(xsk), null(), 0, MSG_DONTWAIT, null(), 0);
+    if _xsk_ring_prod__needs_wakeup(tx) != 0 {
+        sendto(xsk_socket__fd(xsk), null(), 0, MSG_DONTWAIT, null(), 0);
+    }
 }
 
 fn extract_ipv4(socket_addr: &SocketAddr) -> Ipv4Addr {
