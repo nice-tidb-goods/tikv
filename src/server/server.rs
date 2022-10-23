@@ -42,7 +42,7 @@ use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime
 use tokio_timer::timer::Handle;
 use txn_types::{Key, TimeStamp, TsSet};
 
-use crate::storage::txn::store::Store;
+use crate::{server::metrics::GRPC_MSG_HISTOGRAM_STATIC, storage::txn::store::Store};
 
 const FRAME_SIZE: usize = XSK_UMEM__DEFAULT_FRAME_SIZE as usize;
 const NUM_FRAMES: usize = 4096;
@@ -532,6 +532,7 @@ where
                     let xsk = xsk as usize;
                     let buffer = buffer as usize;
                     let umem_ctrl = umem_ctrl.clone();
+                    let begin = Instant::now();
                     read_pool
                         .spawn(
                             async move {
@@ -563,6 +564,9 @@ where
                                 );
                                 udp_payload.truncate(16);
                                 udp_payload.extend_from_slice(&value);
+                                GRPC_MSG_HISTOGRAM_STATIC
+                                    .kv_get
+                                    .observe(begin.elapsed().as_secs_f64());
                                 send_packet(
                                     tx,
                                     buffer,
